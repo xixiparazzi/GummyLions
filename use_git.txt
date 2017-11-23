@@ -1,0 +1,9 @@
+when added a file and upload to web use:
+git add .
+git commit -m "some message"
+git push origin master
+
+when pull from web use:
+first commit if done any changes
+then 
+git pull origin master
