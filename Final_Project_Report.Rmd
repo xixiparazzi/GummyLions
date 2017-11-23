@@ -1,0 +1,223 @@
+---
+title: "Final Project Report"
+output: github_document
+always_allow_html: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## GitHub Documents
+
+This is an R Markdown format used for publishing markdown documents to GitHub. When you click the **Knit** button all R code chunks are run and a markdown file (.md) suitable for publishing to GitHub is generated.
+
+## Data Preparation and Exploration
+0.0, Load Packages
+```{r load packages and function}
+library(data.table)
+library(DT)
+library(dplyr)
+library(ggplot2)
+```
+0.1, Read Dataset
+```{r read dataset}
+#read train, test and submission dataset
+train_dt <- fread(input = '../GummyLions/train.csv')
+test_dt <- fread(input = '../GummyLions/test.csv')
+sample_submission_dt <- fread(input = '../GummyLions/sample_submission.csv')
+
+#read relevant data table
+holidays_events_dt <- fread(input = '../GummyLions/holidays_events.csv')
+items_dt <- fread(input = '../GummyLions/items.csv')
+oil_dt <- fread(input = '../GummyLions/oil.csv')
+stores_dt <- fread(input = '../GummyLions/stores.csv')
+transactions_dt <- fread(input = '../GummyLions/transactions.csv')
+```
+
+0.2, Sample train dataset
+```{r sample train data}
+sample.size <- 100000
+sample_train_dt <- sample_n(train_dt, sample.size)
+item_groceryII <- items_dt[family == "GROCERY II", ]
+sample_groceryII <- train_dt[item_nbr %in% item_groceryII$item_nbr, ]
+```
+0.3, Help function
+```{r help function}
+plot.categoric <- function(dt,col,color = 2){
+  sample <- c("#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+  num.plot <- ggplot(dt, aes(x=get(col))) + 
+    geom_bar(fill = sample[color], alpha = 0.7) + 
+    geom_text(aes(label = ..count..), stat='count', vjust=-0.5) + 
+    theme_minimal() + 
+    xlab(col) +
+    ylab("Freq") +
+    theme(axis.text.x = element_text(angle = 15, size=10))
+  return(num.plot)
+}
+
+plot.histogram <- function(dt,col,color = 5){
+  sample <- c("#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+  num.plot <- ggplot(dt, aes(x=get(col))) + 
+    geom_histogram(breaks=seq(0,70,by=10), fill = sample[color], alpha = 0.8) + 
+    theme_minimal() + 
+    xlab(col)
+    theme(axis.text.x = element_text(angle = 15, size=10))
+  return(num.plot)
+}
+
+plot.scatter <- function(dt,x,y,color = 3){
+  sample <- c("#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+  num.plot <- ggplot(dt, aes(x=get(x),y=get(y))) + 
+    geom_point(size = 1, color = sample[color] ) +
+    geom_line() +
+    xlab(x)+
+    ylab(y)
+  return(num.plot)
+}
+
+#define color
+color <- c("#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+```
+
+1, Variable Identification
+```{r check train dataset summary}
+summary(sample_train_dt)
+min.train.id <- min(sample_train_dt$id)
+max.train.id <- max(sample_train_dt$id)
+min.date <- min(sample_train_dt$date)
+max.date <- max(sample_train_dt$date)
+```
+```{r check train dataset}
+first.lines <- 20
+datatable(sample_train_dt[1:first.lines,])
+```
+## About the data
+**id**: Unique identification for records, train dataset ranges from `r min.train.id` to `r max.train.id`.
+**date**: Date information of the records, train dataset ranges from `r min.date` to `r max.date`.
+**store_nbr**: Unique identification for store number.
+**item_nbr**: Unique identification for item number.
+**unit_sales**: The units of sales by every record. (Removing negative values)
+**onpromotion**: Catehorical variable indicates that items sold on protion or not.
+```{r explore store number}
+store_nbr.plot <- ggplot(sample_train_dt, aes(x=store_nbr)) +
+  geom_bar(aes(weight=rep(1:length(store_nbr)),fill= color[1])) +
+  scale_y_continuous(labels = scales::unit_format()) +
+  xlab("Store Number") +
+  ylab("Sales") +
+  ggtitle("Sales in Distinct Store")
+store_nbr.plot
+```
+```{r explore item number}
+top.item.sales <- {sample_train_dt[, .N, by=c("item_nbr")] %>% data.table()} [order(-N)]
+datatable(top.item.sales[1:20,])
+```
+```{r explore sales}
+promotion.plot <- ggplot(sample_train_dt, aes(x=unit_sales)) + 
+    geom_histogram(breaks=seq(0,20,by=2), fill = color[5], alpha = 0.7) + 
+    theme_minimal() + 
+    xlab("positive unit_sales")
+promotion.plot
+```
+
+```{r explore promotion}
+sale.plot <- ggplot(sample_train_dt, aes(x=onpromotion)) + 
+    geom_bar(fill = color[2], alpha = 0.5, width = 0.5) + 
+    geom_text(aes(label = ..count..), stat='count', vjust=-0.5) + 
+    theme_minimal() + 
+    xlab("ompromotion") +
+    ylab("Freq")+
+    theme(axis.text.x = element_text(angle = 15, size=10))
+sale.plot
+```
+
+```{r check test dataset}
+summary(test_dt)
+test.row <- nrow(test_dt)
+```
+In total `r test.row` lines of test data, having identical table structure with train dataset except for lacking *unit_sales* variable.
+
+```{r check holidays}
+datatable(holidays_events_dt)
+```
+**date**: Holiday date information of the records.
+**type**: Indication of the holiday's type.
+**locale**: Indication of holiday locality attributes.
+**transferred**: Whether the holiday is transfered.
+```{r explore holiday type}
+holiday.type.plot <- ggplot(holidays_events_dt, aes(x=type)) + 
+    geom_bar(fill = color[3], alpha = 0.7, width = 0.5) + 
+    geom_text(aes(label = ..count..), stat='count', vjust=-0.5) + 
+    theme_minimal() + 
+    xlab("Type") +
+    ylab("Freq")+
+    theme(axis.text.x = element_text(angle = 15, size=10))
+holiday.type.plot
+```
+```{r explore locale}
+holiday.locale.plot <- ggplot(holidays_events_dt, aes(x=locale)) + 
+    geom_bar(fill = color[4], alpha = 0.8, width = 0.5) + 
+    geom_text(aes(label = ..count..), stat='count', vjust=-0.5) + 
+    theme_minimal() + 
+    xlab("Locale") +
+    ylab("Freq")+
+    theme(axis.text.x = element_text(angle = 15, size=10))
+holiday.locale.plot
+```
+```{r explore holiday tranfer}
+holiday.transferred.plot <- ggplot(holidays_events_dt, aes(x=transferred)) + 
+    geom_bar(fill = color[2], alpha = 0.7, width = 0.5) + 
+    geom_text(aes(label = ..count..), stat='count', vjust=-0.5) + 
+    theme_minimal() + 
+    xlab("Transferred") +
+    ylab("Freq")+
+    theme(axis.text.x = element_text(angle = 15, size=10))
+holiday.transferred.plot
+```
+
+
+```{r check items}
+datatable(items_dt[1:first.lines,])
+```
+**item_nbr**: The item number.
+**family**: The category of item according to number.
+**class**: The class of item.
+**perishable**: Whether the item is perishable.
+```{r explore item family}
+largest.item.family.plot <- ggplot(items_dt, aes(x=family)) + 
+    geom_bar(fill = color[4], alpha = 0.8, width = 0.5) + 
+    geom_text(aes(label = ..count..), stat='count', vjust=-0.5) + 
+    theme_minimal() + 
+    xlab("Family") +
+    ylab("Freq")+
+    theme(axis.text.x = element_text(angle = 15, size=10))
+largest.item.family.plot
+```
+```{r explore item parishable}
+item.perishable.plot <- ggplot(items_dt, aes(x=perishable)) + 
+    geom_bar(fill = color[2], alpha = 0.7, width = 0.5) + 
+    geom_text(aes(label = ..count..), stat='count', vjust=-0.5) + 
+    theme_minimal() + 
+    xlab("Perishable") +
+    ylab("Freq")+
+    theme(axis.text.x = element_text(angle = 15, size=10))
+item.perishable.plot 
+```
+
+```{r check oil price}
+price.plot <- ggplot(oil_dt, aes(x=date,y=dcoilwtico)) + 
+    geom_point(size = 1, color = color[3] ) +
+    geom_line() +
+    xlab("date")+
+    ylab("dcoilwtico")
+price.plot
+```
+```{r check stores}
+datatable(stores_dt)
+```
+```{r transactions}
+transactions_dt[,lapply(.SD, FUN="sum"), .SDcols=c("transactions"), by=c("store_nbr")]
+
+```
+
+
