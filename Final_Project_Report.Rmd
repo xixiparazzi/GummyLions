@@ -1,51 +1,86 @@
 ---
-title: "Final Project Report"
-output: github_document
+title: "Final Project Report on Grocery Chain Sales Forecasting"
+author: "Tao Song (ts3089), Yangxue Lei (yl3805), Yu Zhou (yz3256)"
+date: "December 1st, 2017"
+output:
+  prettydoc::html_pretty:
+    theme: architect
+    highlight: github
 always_allow_html: yes
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE, eval = TRUE)
 ```
 
-## GitHub Documents
+# Grocery Sales Prediction Documents
+This is an R Markdown format used for publishing markdown documents report on **Grocery Chain Sales Forecasting**. When you click the **Knit** button all R code chunks are run and a markdown file (.md) suitable for publishing to GitHub is generated.
 
-This is an R Markdown format used for publishing markdown documents to GitHub. When you click the **Knit** button all R code chunks are run and a markdown file (.md) suitable for publishing to GitHub is generated.
+# Intrdoduction
+Grocery stores always need to decide on the products purchasing to balance the cost of
+overstock and the demand of popular products by forecasting the product sales.
+Different from such simple optimization problems we met in university, this realistic
+Grocery Chain Sales Forecasting Problem is much more interesting and complex
+considering the large amount of products, the seasonal tastes of customers, the
+unpredictable product marketing and the various grocery shops location. In this project
+we plan to conduct data cleaning and analysis with the raw history data, then build the
+forecasting model to ensure the customers can get right amount of products at the right
+time and the grocery stores can maximum their profits utilizing the machine learning
+techniques.
 
-## Data Preparation and Exploration
-0.0, Load Packages
-```{r load packages and function}
+# Data Source
+*https://www.kaggle.com/c/favorita-grocery-sales-forecasting/data*
+
+# Data Description
+A series of datasets will be used in this project which include various information about the grocery chain operation. The main datasets for analysis are train.csv and test.csv. The rest of files include supplementary information for modelling. The details are listed below:
+● train.csv & test.csv: provide the target unit_sales by date, store_nbr, item_nbr and a
+unique id to label rows for training and testing respectively
+● stores.csv: store metadata, including city, state, type, and cluster (a grouping of similar
+stores)
+● items.csv: Item metadata, including family, class, and perishable
+● transactions.csv: the count of sales transactions for each date, store_nbr combination
+● holidays_events.csv: holidays and events information
+
+# Data Preparation and Exploration
+## 1, Data Preparation
+1.0, Load Packages and Read Dataset
+```{r load packages and function, include=FALSE}
 library(data.table)
 library(DT)
 library(dplyr)
 library(ggplot2)
+library(plyr)
+library(lattice)
+library(xgboost)
+library(caret)
+library(leaflet)
+library(e1071)
 ```
-0.1, Read Dataset
-```{r read dataset}
-#read train, test and submission dataset
-train_dt <- fread(input = '../GummyLions/train.csv')
+
+```{r read dataset, echo=TRUE}
+raw_train_dt <- fread(input = '../GummyLions/train.csv')
 test_dt <- fread(input = '../GummyLions/test.csv')
 sample_submission_dt <- fread(input = '../GummyLions/sample_submission.csv')
 
-#read relevant data table
 holidays_events_dt <- fread(input = '../GummyLions/holidays_events.csv')
 items_dt <- fread(input = '../GummyLions/items.csv')
 oil_dt <- fread(input = '../GummyLions/oil.csv')
 stores_dt <- fread(input = '../GummyLions/stores.csv')
 transactions_dt <- fread(input = '../GummyLions/transactions.csv')
 ```
-
-0.2, Sample train dataset
+1.2, Sample and divide train dataset
 ```{r sample train data}
-sample.size <- 100000
-sample_train_dt <- sample_n(train_dt, sample.size)
-item_groceryII <- items_dt[family == "GROCERY II", ]
-sample_groceryII <- train_dt[item_nbr %in% item_groceryII$item_nbr, ]
+#Sample subset to prototype
+sample.list <- items_dt[family == "GROCERY II", ]
+train_dt <- raw_train_dt[item_nbr %in% sample.list$item_nbr, ]
+sample <- train_dt[item_nbr == 315463 & store_nbr == 44,]
+sample_train_dt <- sample[date < "2017-01-01", ]
+sample_test_dt <- sample[date > "2017-01-01", ]
 ```
-0.3, Help function
+
+1.3, Help function
 ```{r help function}
 plot.categoric <- function(dt,col,color = 2){
-  sample <- c("#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
   num.plot <- ggplot(dt, aes(x=get(col))) + 
     geom_bar(fill = sample[color], alpha = 0.7) + 
     geom_text(aes(label = ..count..), stat='count', vjust=-0.5) + 
@@ -57,7 +92,6 @@ plot.categoric <- function(dt,col,color = 2){
 }
 
 plot.histogram <- function(dt,col,color = 5){
-  sample <- c("#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
   num.plot <- ggplot(dt, aes(x=get(col))) + 
     geom_histogram(breaks=seq(0,70,by=10), fill = sample[color], alpha = 0.8) + 
     theme_minimal() + 
@@ -67,7 +101,6 @@ plot.histogram <- function(dt,col,color = 5){
 }
 
 plot.scatter <- function(dt,x,y,color = 3){
-  sample <- c("#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
   num.plot <- ggplot(dt, aes(x=get(x),y=get(y))) + 
     geom_point(size = 1, color = sample[color] ) +
     geom_line() +
@@ -76,148 +109,307 @@ plot.scatter <- function(dt,x,y,color = 3){
   return(num.plot)
 }
 
-#define color
-color <- c("#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+#define color set
+color <- c("#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#FF3333")
 ```
 
-1, Variable Identification
+## 2, Data Summary
+
+2.1.1, Train and Test Variable Identification
+
+Training data, which includes the target *unit_sales* by date, *store_nbr*, and *item_nbr* and a unique *id* to label rows:
+
+**id**: Unique identification for every record.
+**date**: Date information for every daily record.
+**store_nbr**: Unique identification for *store number*.
+**item_nbr**: Unique identification for *item number*. 
+**unit_sales**: The *unit_sales* for every item, could be integer (a bag of chips) or float (1.5 kg of cheese). Negative values of *unit_sales* represent returns of that particular item.
+**onpromotion**: Binary variable *onpromotion* indicates whether that item_nbr was on promotion for a specified date and store_nbr. Approximately 16% of the *onpromotion* values in this file are *NaN*.
+
+**NOTE**: The training data does not include rows for items that had zero unit_sales for a store/date combination. There is no information as to whether or not the item was in stock for the store on the date, and teams will need to decide the best way to handle that situation. Also, there are a small number of items seen in the training data that aren't seen in the test data.
+
 ```{r check train dataset summary}
-summary(sample_train_dt)
-min.train.id <- min(sample_train_dt$id)
-max.train.id <- max(sample_train_dt$id)
-min.date <- min(sample_train_dt$date)
-max.date <- max(sample_train_dt$date)
+summary(train_dt[,c("store_nbr", "item_nbr","unit_sales","onpromotion")])
+length.id <- nrow(train_dt)
+min.date <- min(train_dt$date)
+max.date <- max(train_dt$date)
 ```
+In total the train dataset contains `r length.id` lines of record. The date ranges from `r min.date` to `r max.date`.
 ```{r check train dataset}
 first.lines <- 20
-datatable(sample_train_dt[1:first.lines,])
+datatable(train_dt[1:first.lines,])
 ```
-## About the data
-**id**: Unique identification for records, train dataset ranges from `r min.train.id` to `r max.train.id`.
-**date**: Date information of the records, train dataset ranges from `r min.date` to `r max.date`.
-**store_nbr**: Unique identification for store number.
-**item_nbr**: Unique identification for item number.
-**unit_sales**: The units of sales by every record. (Removing negative values)
-**onpromotion**: Catehorical variable indicates that items sold on protion or not.
-```{r explore store number}
-store_nbr.plot <- ggplot(sample_train_dt, aes(x=store_nbr)) +
-  geom_bar(aes(weight=rep(1:length(store_nbr)),fill= color[1])) +
-  scale_y_continuous(labels = scales::unit_format()) +
-  xlab("Store Number") +
-  ylab("Sales") +
-  ggtitle("Sales in Distinct Store")
+
+2.1.2 Explore Sales and Item Sales in Train Dataset
+```{r explore daily item sales}
+daily.item.sales <- train_dt[,lapply(.SD, FUN="sum"), .SDcol=c("unit_sales"), by=c("date") ]
+daily.sales.item.plot <- ggplot(daily.item.sales, aes(x=as.Date(date),y=unit_sales, fill=unit_sales)) + 
+  geom_line() +
+  xlab("Date") +
+  ylab("Daily Item Sales") +
+  ggtitle("Daily Item Sales Trend") +
+  theme_minimal()
+daily.sales.item.plot
+```
+```{r explore monthly item sales}
+monthly.item.sales <- {train_dt[,`:=`(by.month, format(as.Date(date),"%Y-%m"))] %>% data.table()} [,lapply(.SD, FUN="sum"), .SDcol=c("unit_sales"), by=c("by.month") ]
+monthly.item.sales[,`:=`(by.month, paste(by.month,"01",sep="-"))]
+monthly.item.sales.plot <- ggplot(monthly.item.sales, aes(x=as.Date(by.month,"%Y-%m-%d"), y=unit_sales, fill=unit_sales)) +
+  geom_line() +
+  xlab("Date") +
+  ylab("Monthly Item Sales") +
+  ggtitle("Monthly Item Sales Trend") +
+  theme_minimal()
+monthly.item.sales.plot
+```
+```{r explore daily sales}
+daily.sales <- train_dt[,.N, by=c("date") ]
+daily.sales.plot <- ggplot(daily.sales, aes(x=as.Date(date),y=N, fill=N)) + 
+  geom_line(color = "blue") +
+  xlab("Date") +
+  ylab("Daily Sales") +
+  ggtitle("Daily Sales Trend") +
+  theme_minimal()
+daily.sales.plot
+```
+```{r explore monthly sales}
+monthly.sales <- {train_dt[,`:=`(by.month, format(as.Date(date),"%Y-%m"))] %>% data.table()} [,.N, by=c("by.month") ]
+monthly.sales[,`:=`(by.month, paste(by.month,"01",sep="-"))]
+monthly.sales.plot <- ggplot(monthly.sales, aes(x=as.Date(by.month,"%Y-%m-%d"), y=N)) +
+  geom_line(color = "blue") +
+  xlab("Date") +
+  ylab("Monthly Sales") +
+  ggtitle("Monthly Sales Trend") +
+  theme_minimal()
+monthly.sales.plot
+```
+From the item sales by day and month, the item sales fluctuate and have obvious seational effect. The item sales would soar during the end of the year, which is exactly *Christmas Holidays*. After the holiday, both of item sales and sales would have a significant decreasement at the begin of new year. 
+
+2.1.3 Explore Sales by Distinct Store
+```{r explore store_nbr sales}
+factor_train_dt <- {train_dt[unit_sales<30 & unit_sales>-10,] %>% data.table()} [,`:=`(store_nbr, as.factor(store_nbr))]
+store_nbr.plot <- ggplot(factor_train_dt, aes(x=store_nbr, y=unit_sales, fill=store_nbr))+
+  geom_boxplot(outlier.shape=NA) +
+  guides(fill=FALSE) +
+  xlab("Store_nbr") +
+  ylab("Sales by store_nbr") +
+  ggtitle("Sales by Store Boxplot") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, size=8))
 store_nbr.plot
 ```
+From the boxplot the sales number in distinct stores have great difference, the average sales number with highest value might be tens of lowest one.
+
+2.2.1, Summary Item Information
 ```{r explore item number}
-top.item.sales <- {sample_train_dt[, .N, by=c("item_nbr")] %>% data.table()} [order(-N)]
+top.item.sales <- {train_dt[, .N, by=c("item_nbr")] %>% data.table()} [order(-N)] %>% setnames(old="N",new="Count")
 datatable(top.item.sales[1:20,])
 ```
-```{r explore sales}
-promotion.plot <- ggplot(sample_train_dt, aes(x=unit_sales)) + 
-    geom_histogram(breaks=seq(0,20,by=2), fill = color[5], alpha = 0.7) + 
-    theme_minimal() + 
-    xlab("positive unit_sales")
-promotion.plot
+2.2.2, Explore Daily Item Sales Distribution
+```{r explore daily item sales distribution}
+daily.sales.distribution <- train_dt[, lapply(.SD, FUN="sum"), .SDcols=c("unit_sales"), by=c("date")]
+daily.sales.mean <- mean(daily.sales.distribution$unit_sales)
+daily.sales.variance <- sd(daily.sales.distribution$unit_sales)
+daily.sales.skewness <- skewness(daily.sales.distribution$unit_sales)
+daily.sales.kurtosis <- kurtosis(daily.sales.distribution$unit_sales)
+daily.sales.distribution.plot <- ggplot(daily.sales.distribution, aes(unit_sales)) + 
+    geom_histogram(aes(y=..density..),breaks = seq(400,3000,by=200),fill = color[2], alpha = 0.8) + 
+    geom_density(color = color[3], alpha = 0.5) +
+    xlab("Unit Sales") +
+    ylab("Density") +
+    ggtitle("Daily Sales Histogram")
+    theme_minimal()
+daily.sales.distribution.plot
 ```
+```{r explore log daily item sales distribution}
+daily.sales.distribution[,`:=`(log_unit_sales, log(unit_sales))]
 
+log.daily.sales.mean <- mean(daily.sales.distribution$log_unit_sales)
+log.daily.sales.variance <- sd(daily.sales.distribution$log_unit_sales)
+log.daily.sales.skewness <- skewness(daily.sales.distribution$log_unit_sales)
+log.daily.sales.kurtosis <- kurtosis(daily.sales.distribution$log_unit_sales)
+log.daily.sales.distribution.plot <- ggplot(daily.sales.distribution, aes(log_unit_sales)) + 
+    geom_histogram(aes(y=..density..), breaks=seq(6, 8, by=0.2), fill = "cyan", alpha = 0.5) + 
+    geom_density(color = color[3], alpha = 0.5) +
+    xlab("Unit Sales") +
+    ylab("Density") +
+    ggtitle("Daily Log-Sales Histogram")
+    theme_minimal()
+log.daily.sales.distribution.plot
+```
+From the daily item sales histogram, the daily item sales distribution has a heavy tail and right skewed distribution, with mean value `r daily.sales.mean` and standard deviation `r daily.sales.variance`. The skewness is `r daily.sales.kurtosis` and kurtosis is `r daily.sales.kurtosis`. After log transformation, the log daily item sales distrbution would approach more to normal distribution, wuth mean value `r log.daily.sales.mean` and standard deviation `r log.daily.sales.variance`. The skewness is `r log.daily.sales.kurtosis` and kurtosis is `r log.daily.sales.kurtosis`
+
+2.2.3, Explore Promotion
 ```{r explore promotion}
-sale.plot <- ggplot(sample_train_dt, aes(x=onpromotion)) + 
-    geom_bar(fill = color[2], alpha = 0.5, width = 0.5) + 
-    geom_text(aes(label = ..count..), stat='count', vjust=-0.5) + 
-    theme_minimal() + 
-    xlab("ompromotion") +
-    ylab("Freq")+
-    theme(axis.text.x = element_text(angle = 15, size=10))
+onpromotion.count <- train_dt[, .N, by=c("onpromotion")] %>% setnames(old="N", new="number")
+ sale.plot <- ggplot(onpromotion.count, aes(x="", y=number, fill=onpromotion)) + 
+  geom_bar(width = 0.5, stat="identity") +
+  coord_polar("y", start=0) +
+  theme_minimal()
 sale.plot
 ```
-
+From the bar table above, only a few number of items are sold on promotion, while almost 3/4 of them are sold without promotion. Also about 1/4 of the data miss.
 ```{r check test dataset}
-summary(test_dt)
+summary(test_dt[,c("store_nbr","item_nbr","onpromotion")])
 test.row <- nrow(test_dt)
 ```
-In total `r test.row` lines of test data, having identical table structure with train dataset except for lacking *unit_sales* variable.
+In total there are `r test.row` lines of records in test dataset, having identical structure with train dataset except for lacking *unit_sales* variable.
 
 ```{r check holidays}
 datatable(holidays_events_dt)
 ```
-**date**: Holiday date information of the records.
-**type**: Indication of the holiday's type.
-**locale**: Indication of holiday locality attributes.
-**transferred**: Whether the holiday is transfered.
+**date**: Holiday date information.
+**type**: *Holiday* indicate normal celebration days. *Additional* holidays are days added a regular calendar holiday, for example, as typically happens around Christmas (making Christmas Eve a holiday). Days that are type *Bridge* are extra days that are added to a holiday (e.g., to extend the break across a long weekend). These are frequently made up by the type Work Day which is a day not normally scheduled for work (e.g., Saturday) that is meant to payback the Bridge.
+**locale**: Indication of holiday locality attributes, including national, regional and local attribute.
+**transferred**: Whether the holiday is transfered. Pay special attention to the transferred column. A holiday that is transferred officially falls on that calendar day, but was moved to another date by the government. A transferred day is more like a normal day than a holiday. To find the day that it was actually celebrated, look for the corresponding row where type is Transfer. For example, the holiday Independencia de Guayaquil was transferred from 2012-10-09 to 2012-10-12, which means it was celebrated on 2012-10-12.
 ```{r explore holiday type}
 holiday.type.plot <- ggplot(holidays_events_dt, aes(x=type)) + 
     geom_bar(fill = color[3], alpha = 0.7, width = 0.5) + 
-    geom_text(aes(label = ..count..), stat='count', vjust=-0.5) + 
+    geom_text(aes(label = ..count..), stat='count', vjust=-0.4) + 
     theme_minimal() + 
     xlab("Type") +
-    ylab("Freq")+
+    ylab("Freq") +
+    ggtitle("Holiday Histogram")
     theme(axis.text.x = element_text(angle = 15, size=10))
 holiday.type.plot
 ```
+From the histogram most of the holidays are real holidays: most of holidays, additional days, bridge days and event, while a small part of holidays are tranfered.
 ```{r explore locale}
-holiday.locale.plot <- ggplot(holidays_events_dt, aes(x=locale)) + 
-    geom_bar(fill = color[4], alpha = 0.8, width = 0.5) + 
-    geom_text(aes(label = ..count..), stat='count', vjust=-0.5) + 
-    theme_minimal() + 
-    xlab("Locale") +
-    ylab("Freq")+
-    theme(axis.text.x = element_text(angle = 15, size=10))
-holiday.locale.plot
+holiday.locale <- holidays_events_dt[, .N, by=c("locale")] %>% setnames(old="N", new="number")
+holiday.locale.plot <- ggplot(holiday.locale, aes(x="", y=number, fill=locale)) + 
+  geom_bar(width = 0.5, stat="identity") +
+  coord_polar("y", start=0) +
+  scale_fill_brewer(palette="Blues") +
+  theme_minimal()
+holiday.locale.plot 
 ```
+From the bar chart about 45% of the holidays belong to national festivals and 45% of the holidays are local holidays. Only a small piece of holidays, roughly 10% would be regional holidays.
 ```{r explore holiday tranfer}
-holiday.transferred.plot <- ggplot(holidays_events_dt, aes(x=transferred)) + 
-    geom_bar(fill = color[2], alpha = 0.7, width = 0.5) + 
-    geom_text(aes(label = ..count..), stat='count', vjust=-0.5) + 
-    theme_minimal() + 
-    xlab("Transferred") +
-    ylab("Freq")+
-    theme(axis.text.x = element_text(angle = 15, size=10))
+holiday.transferred <- holidays_events_dt[, .N, by=c("transferred")] %>% setnames(old="N", new="number")
+holiday.transferred.plot <- ggplot(holiday.transferred, aes(x="", y=number, fill=transferred)) + 
+  geom_bar(width = 0.5, stat="identity") +
+  coord_polar("y", start=0) +
+  scale_fill_brewer(palette="Greens") +
+  theme_minimal()
 holiday.transferred.plot
 ```
-
-
+From the bar chart most of the holidays are normal and only 10% of them are transferred to another days.
 ```{r check items}
 datatable(items_dt[1:first.lines,])
 ```
-**item_nbr**: The item number.
-**family**: The category of item according to number.
+Item metadata, including family, class, and perishable.
+**item_nbr**: Unique identification for item number.
+**family**: The category of item.
 **class**: The class of item.
-**perishable**: Whether the item is perishable.
+**perishable**: Whether the item is perishable. And items marked as perishable have a score weight of 1.25; otherwise, the weight is 1.0.
 ```{r explore item family}
 largest.item.family.plot <- ggplot(items_dt, aes(x=family)) + 
-    geom_bar(fill = color[4], alpha = 0.8, width = 0.5) + 
-    geom_text(aes(label = ..count..), stat='count', vjust=-0.5) + 
+    geom_bar(fill = color[1], alpha = 0.8, width = 0.8) + 
+    geom_text(aes(label = ..count..), stat='count', vjust=-0.3) + 
     theme_minimal() + 
     xlab("Family") +
-    ylab("Freq")+
-    theme(axis.text.x = element_text(angle = 15, size=10))
+    ylab("Item count") +
+    theme(axis.text.x = element_text(angle = 90, size=5))
 largest.item.family.plot
 ```
-```{r explore item parishable}
-item.perishable.plot <- ggplot(items_dt, aes(x=perishable)) + 
-    geom_bar(fill = color[2], alpha = 0.7, width = 0.5) + 
-    geom_text(aes(label = ..count..), stat='count', vjust=-0.5) + 
-    theme_minimal() + 
-    xlab("Perishable") +
-    ylab("Freq")+
-    theme(axis.text.x = element_text(angle = 15, size=10))
-item.perishable.plot 
-```
 
+```{r explore item parishable}
+item.perishable <- items_dt[, .N, by=c("perishable")] %>% setnames(old="N", new="number")
+item.number <- nrow(items_dt)
+item.perishable[,`:=`(perishable, mapvalues(item.perishable$perishable,from = c(0,1), to=c("False","True")))]
+item.perishable.plot <- ggplot(item.perishable, aes(x="", y=number, fill=perishable)) + 
+  geom_bar(width = 0.5, stat="identity") +
+  coord_polar("y", start=0) +
+  scale_fill_brewer(palette="Oranges") +
+  theme_minimal()
+item.perishable.plot
+```
+From the bar chart among the `r item.number` pieces of items, about 25% of them are perishable, and this types of items should be allocated higher weight than unperishable items. The competition pages states that perishable items are weigthed more heavily than non-perishables. Shorter shelf lives mean a smaller margin of error when it comes to forecasting sales.
 ```{r check oil price}
-price.plot <- ggplot(oil_dt, aes(x=date,y=dcoilwtico)) + 
-    geom_point(size = 1, color = color[3] ) +
-    geom_line() +
-    xlab("date")+
-    ylab("dcoilwtico")
+price.plot <- ggplot(oil_dt, aes(x=as.Date(date),y=dcoilwtico, fill=dcoilwtico)) + 
+  geom_line(color=color[2]) +
+  geom_area(fill="cyan", alpha=0.08) +
+  xlab("Date") +
+  ylab("Oil price") +
+  ggtitle("Oil Price Fluctuation") +
+  theme_minimal()
 price.plot
 ```
+We see that oil prices suffered a collapse towards the end of 2014 and have not recovered. In fact despite some volatility, oil prices are at the same level as they were in the beginning of 2015. As a result of this we may see a significant shift in store sales around late 2014. Looking at the unit sales data, this is not readily apparent. Although sales do appear to drop off in the early part of 2015, in late 2014 they are rising.
 ```{r check stores}
 datatable(stores_dt)
 ```
-```{r transactions}
-transactions_dt[,lapply(.SD, FUN="sum"), .SDcols=c("transactions"), by=c("store_nbr")]
+```{r explore store location}
+##revised from the Kaggle
+lat <-  c(-0.1807, -0.2389, 0.0367141, -0.9316, -1.6636, 0.3516889, -1.5905, -1.4924, -1.2543, -2.1710, -2.227827, -1.8622, -1.8019, -1.0225, -2.6285, -2.2347644, -2.9001, -4.0079, -3.2581,  0.98333, -0.9677, -0.2714) 
+lng <- c(-78.4678, -79.1774, -78.1507, -78.6058, -78.6546, -78.1222, -78.9995, -78.0024, -78.6229, -79.9224, -80.9585, -79.9777, -79.5346, -79.4604, -80.3896, -80.9002, -79.0059, -79.2113, -79.9554, -79.65, -80.7089, -79.4648)
 
+{stores_dt[, `:=`(stores_number, .N), by = c("city")] %>% data.table()} [, c('lat', 'lng') := list(lat, lng)] %>%
+    leaflet() %>% 
+    setView(lat = -0.900653, lng = -78.467834, zoom = 7) %>% 
+    addTiles() %>%
+    addCircleMarkers(
+        ~lng,
+        ~lat,
+        radius = ~ stores_number,
+        label = ~ city
+    )
 ```
+The map draws the distribution of cities and sales centers in the country. Those city with high sales volume would be marked with greater circle.
+```{r explore sales by city}
+new_train_dt <- merge(train_dt, stores_dt, by.x="store_nbr", by.y="store_nbr", all.x=TRUE)
+sales.by.city <- new_train_dt[, lapply(.SD, FUN="sum"), .SDcols=c("unit_sales"), by=c("city")]
 
+sales.by.city.plot <- ggplot(sales.by.city, aes(x=city, y=unit_sales)) + 
+  geom_bar(stat="identity", fill = color[4], alpha = 0.8, width = 0.8) +
+  #geom_bar(fill = color[4], alpha = 0.8, width = 0.8) +
+  #geom_text(aes(label = ..identity..), stat='count', vjust=-0.3) + 
+    theme_minimal() + 
+    xlab("City") +
+    ylab("Unite Sales") +
+    theme(axis.text.x = element_text(angle = 50, size=5))
+sales.by.city.plot
+```
+From the graph Quito city, the capital and population center of the contry, takes the largest share of marke and is far higher than any other city.
+```{r explore sales by state}
+new_train_dt <- merge(train_dt, stores_dt, by.x="store_nbr", by.y="store_nbr", all.x=TRUE)
+sales.by.state <- new_train_dt[, lapply(.SD, FUN="sum"), .SDcols=c("unit_sales"), by=c("state")]
 
+sales.by.state.plot <- ggplot(sales.by.state, aes(x=state, y=unit_sales)) + 
+  geom_bar(stat="identity", fill = color[6], alpha = 0.7, width = 0.8) +
+    theme_minimal() + 
+    xlab("State") +
+    ylab("Unite Sales") +
+    theme(axis.text.x = element_text(angle = 50, size=5))
+sales.by.state.plot
+```
+From the graph Pichicha province, where the capital of Quito city locates and population aggregates, takes the largest share of marke and is far higher than any other state.
+```{r check transaction data}
+datatable(transactions_dt[1:first.lines,])
+```
+```{r explore transactions}
+trans_dt <- transactions_dt[,lapply(.SD, FUN="sum"), .SDcols=c("transactions"), by=c("store_nbr")]
+transaction.plot <- ggplot(trans_dt, aes(x=store_nbr,y=transactions)) +
+  geom_bar(stat="identity",fill= color[7], alpha=0.6) +
+  scale_y_continuous(labels = scales::unit_format()) +
+  guides(fill=FALSE) +
+  xlab("Transaction Number") +
+  ylab("Transaction by store") +
+  ggtitle("Transactions by Store Histgram") +
+  theme_minimal()
+transaction.plot
+```
+For this competition we are also provided with transactions, which is a count of transactions per store per day. One transaction would be one customer buying 1 or more products - basically one customer going through the cashier. Let’s first see what these look like over time. After plotting the transaction number by store, still we could conclude that in some stores the average transaction would be much higher than others.
+```{r transaction sales ratio}
+temp <- raw_train_dt[, sum(unit_sales), by=c("date","store_nbr") ] %>% setnames(old="V1",new="Item_Sales")
+trans_sales <- merge(temp, transactions_dt, by.x=c("date","store_nbr"), by.y=c("date","store_nbr"))
+trans_sales <- {trans_sales[,`:=`(ratio, Item_Sales/transactions)] %>% data.table()} [,lapply(.SD, FUN="sum"), .SDcols=c("Item_Sales","transactions","ratio"), by=c("date")]
+
+item.sales.ratio.plot <- ggplot(trans_sales, aes(x=as.Date(date), y=ratio, fill=ratio)) +
+  geom_line() +
+  xlab("Date") +
+  ylab("Item Sales Ratio") +
+  ggtitle("Daily Item Sales Trend") +
+  theme_minimal()
+item.sales.ratio.plot
+```
