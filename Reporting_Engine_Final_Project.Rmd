@@ -1,0 +1,180 @@
+---
+title: "Report engine - Final Project"
+output: 
+  flexdashboard::flex_dashboard:
+    theme: cosmo
+runtime: shiny
+---
+
+
+```{r setup, include=FALSE}
+library(flexdashboard)
+library(shiny)
+library(rmarkdown)
+library(knitr)
+library(Hmisc)
+library(DT)
+library(data.table)
+library(leaflet)
+library(htmltools)
+
+assignInNamespace("cedta.override", c(data.table:::cedta.override,"rmarkdown"), "data.table")
+opts_chunk$set(echo = FALSE, comment="", warning = FALSE, message = FALSE, tidy.opts=list(width.cutoff=55), tidy = TRUE)
+
+```
+
+
+```{r read_data, include=FALSE}
+dat <- fread(input = "/Users/Snow/Documents/GitHub/GummyLions/sample_groceryII.csv", verbose = FALSE)
+sample_demo_dt <- dat[date >= "2017-01-01", ]
+stores_dt <- fread(input = '/Users/Snow/Documents/GitHub/GummyLions/stores.csv')
+
+```
+
+
+```{r define_variables}
+monthly.item.sales <- {sample_demo_dt[,`:=`(by.month, format(as.Date(date),"%Y-%m"))] %>% data.table()} [,lapply(.SD, FUN="sum"), .SDcol=c("unit_sales"), by=c("by.month") ]
+
+factor_train_dt <- {sample_demo_dt[unit_sales>0,] %>% data.table()} [,`:=`(store_nbr, as.factor(store_nbr))]
+
+unique.products <- sample_demo_dt[, unique(item_nbr)]
+unique.stores <- sample_demo_dt[, unique(store_nbr)]
+num.products <- length(unique.products)
+unm.stores <- length(unique.stores)
+unique.month <- sample_demo_dt[, unique(by.month)]
+
+```
+
+```{r functions}
+percentage.table <- function(x, digits = 1){
+  tab <- table(x)
+  percentage.tab <- 100*tab/(sum(tab))
+  rounded.tab <- round(x = percentage.tab, digits = digits)
+  return(rounded.tab)
+}
+
+round.numerics <- function(x, digits){
+  if(is.numeric(x)){
+    x <- round(x = x, digits = digits)
+  }
+  return(x)
+}
+
+invertfunc<- function(x) {
+  y = 10 - x
+  return(y)
+}
+```
+
+
+Introduction
+=====================================  
+
+Demo data - from 2017-01-01 to 2017-08-15
+
+
+Prediction Overview
+===================================
+
+Inputs {.sidebar}
+-------------------------------------
+
+```{r}
+# shiny inputs defined here
+inputPanel(
+  selectInput(inputId = "month_variables", label = "Select Months:", choices = unique.month, selected = unique.month[1:3], multiple = TRUE),
+  selectInput(inputId = "product_variables", label = "Select Products:", choices = unique.products, selected = unique.products[1:5], multiple = TRUE),
+  selectInput(inputId = "store_variables", label = "Select Stores:", choices = unique.stores, selected = unique.stores[1:10], multiple = TRUE),
+  
+  checkboxInput(inputId = "info_decreasing", label = "Sorted", value = TRUE)
+)
+
+```
+ 
+Column
+-------------------------------------
+    
+### By Product
+    
+```{r}
+renderPlot({
+  prediction_by_product = sample_demo_dt[by.month %in% input$month_variables & item_nbr %in% input$product_variables & store_nbr %in% input$store_variables , lapply(X = .SD, FUN = "sum", na.rm = TRUE), .SDcols = "unit_sales", keyby = "item_nbr"]
+  
+  if(input$info_decreasing == TRUE){
+    setorderv(x = prediction_by_product, cols = "unit_sales", order = -1)
+  }
+  
+  barplot(height = prediction_by_product[, unit_sales], names.arg = prediction_by_product[, item_nbr], space = 0.01, las = 1, main = "Sales by Prodcut", ylab = "Product")
+  axis(side = 2, at = 1:10, las = 2)
+  space_val = 0
+  text(x = -0.4 + 1:prediction_by_product[, .N]*(1+space_val), y = prediction_by_product[, unit_sales], labels = prediction_by_product[, unit_sales], pos = 1)
+  
+}) 
+```
+    
+### By Store
+
+```{r}
+renderPlot({
+  prediction_by_store = sample_demo_dt[by.month %in% input$month_variables & item_nbr %in% input$product_variables & store_nbr %in% input$store_variables , lapply(X = .SD, FUN = "sum", na.rm = TRUE), .SDcols = "unit_sales", keyby = "store_nbr"]
+  
+  if(input$info_decreasing == TRUE){
+    setorderv(x = prediction_by_store, cols = "unit_sales", order = -1)
+  }
+  
+  barplot(height = prediction_by_store[, unit_sales], names.arg = prediction_by_store[, store_nbr], space = 0.01, las = 1, main = "Sales by Prodcut", ylab = "Product")
+  axis(side = 2, at = 1:10, las = 2)
+  space_val = 0
+  text(x = -0.4 + 1:prediction_by_store[, .N]*(1+space_val), y = prediction_by_store[, unit_sales], labels = prediction_by_store[, unit_sales], pos = 1)
+  
+}) 
+```
+
+
+
+Best Sellers
+=====================================  
+
+
+Row {data-height=800}
+-------------------------------------
+
+```{r map}
+inputPanel(
+  selectInput(inputId = "product_variables_map", label = "Select Products:", choices = unique.products, selected = unique.products[1])
+ 
+)
+
+
+
+lat <-  c(-0.1807, -0.2389, 0.0367141, -0.9316, -1.6636, 0.3516889, -1.5905, -1.4924, -1.2543, -2.1710, -2.227827, -1.8622, -1.8019, -1.0225, -2.6285, -2.2347644, -2.9001, -4.0079, -3.2581,  0.98333, -0.9677, -0.2714) 
+lng <- c(-78.4678, -79.1774, -78.1507, -78.6058, -78.6546, -78.1222, -78.9995, -78.0024, -78.6229, -79.9224, -80.9585, -79.9777, -79.5346, -79.4604, -80.3896, -80.9002, -79.0059, -79.2113, -79.9554, -79.65, -80.7089, -79.4648)
+
+{stores_dt[, `:=`(stores_number, .N), by = c("city")] %>% data.table()} [, c('lat', 'lng') := list(lat, lng)] %>%
+    leaflet() %>% 
+    setView(lat = -0.900653, lng = -78.467834, zoom = 7) %>% 
+    addTiles() %>%
+    addMarkers(
+      ~lng,
+      ~lat,
+      popup = ~htmlEscape(city))
+
+```
+
+
+Model evaluation
+=====================================  
+
+Row {data-height=500}
+-------------------------------------
+
+```{r brand_perceptions}
+inputPanel(
+ 
+)
+
+#<button type="button" class="btn btn-info">Info</button>
+
+
+```
+
