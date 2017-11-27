@@ -19,7 +19,7 @@ unique.dates <- unique(groceryII_dat$date)
 unique.stores <- unique(groceryII_dat$store_nbr)
 unique.items <- unique(groceryII_dat$item_nbr)
 groceryII_dt <- data.table(expand.grid(date = unique.dates, store_nbr = unique.stores, item_nbr = unique.items))
-<<<<<<< HEAD
+
 #adding perishable factor
 groceryII_dt[item_nbr %in% items_dt[perishable == 0,], ':='(perishable, 1)]
 groceryII_dt[, ':='(perishable, mapvalues(groceryII_dt$perishable, c(NA), c(1.25)))]
@@ -27,15 +27,12 @@ groceryII_dt[, ':='(perishable, mapvalues(groceryII_dt$perishable, c(NA), c(1.25
 groceryII_dt <- merge(groceryII_dt, stores_dt, by = c("store_nbr"))
 #creating full trainable data
 groceryII_dt <- merge(groceryII_dt, groceryII_dat[,!c("V1","id")], by = c("date" , "store_nbr", "item_nbr"), all.x = TRUE)
-=======
-groceryII_dt <- merge(groceryII_dt, groceryII_dat, by = c("date" , "store_nbr", "item_nbr"), all.x = TRUE)
->>>>>>> 73a9429f79c67fd8a5d873ba8bfae72b3f1a1e2f
 setorderv(groceryII_dt, c("date", "store_nbr", "item_nbr"))
 groceryII_dt[unit_sales < 0, ':='(unit_sales, 0)]
 groceryII_dt[, ':='(unit_sales, mapvalues(groceryII_dt$unit_sales, c(NA), c(0)))]
 groceryII_dt[, ':='(dow, weekdays(as.Date(date)))]
 
-<<<<<<< HEAD
+
 #add holiday events
 #add local holiday
 holidays_events_local <- holidays_events_dt[locale == "Local" & transferred == FALSE, ]
@@ -47,8 +44,6 @@ groceryII_dt[date %in% holidays_events_regional$date & state %in% holidays_event
 holidays_events_national <- holidays_events_dt[locale == "National" & transferred == FALSE, ]
 groceryII_dt[date %in% holidays_events_national$date, ':='(transferred, FALSE)]
 
-=======
->>>>>>> 73a9429f79c67fd8a5d873ba8bfae72b3f1a1e2f
 #split to train and test data set
 groceryII_train_dt <- groceryII_dt[date >= '2016-08-01' & date < '2017-08-01', ]
 groceryII_test_dt <- groceryII_dt[date >= '2017-08-01', ]
@@ -77,7 +72,6 @@ ma[, ':='(ma_median, apply(ma, 1, median))]
 groceryII_test_dt <- merge(groceryII_test_dt, ma[, c('store_nbr','item_nbr','ma_median')], by = c('store_nbr', 'item_nbr'), all.x = TRUE)
 groceryII_test_dt <- merge(groceryII_test_dt, weekly_factor[, c('store_nbr','item_nbr', 'dow','factor')], by = c('store_nbr', 'item_nbr', 'dow'), all.x = TRUE)
 groceryII_test_dt[, ':='(pred, exp(ma_median*factor)-1)]
-<<<<<<< HEAD
 groceryII_test_dt[, ':='(NWSLE, perishable * (log(pred+1)-log(unit_sales+1))**2)]
 groceryII_test_NWRMSLE <- groceryII_test_dt[, lapply(.SD, sum), .SDcols = c("perishable", "NWSLE"), by = c("store_nbr", "item_nbr")]
 setnames(groceryII_test_NWRMSLE, c("perishable", "NWSLE"), c("w_sum","NWSLE_sum"))
@@ -115,10 +109,3 @@ setnames(groceryII_test_NWRMSLE_wPH, c("perishable", "NWSLE_wPH"), c("w_sum_wPH"
 groceryII_test_NWRMSLE_wPH[, ':='(NWRMSLE_wPH, sqrt(NWSLE_sum_wPH / w_sum_wPH))]
 summary(groceryII_test_NWRMSLE_wPH$NWRMSLE_wPH)
 
-=======
-groceryII_test_dt[, ':='(diff, pred-unit_sales)]
-groceryII_test_dt[, ':='(squared_error, diff ** 2)]
-groceryII_test_MSE <- groceryII_test_dt[, lapply(.SD, mean), .SDcols = c("squared_error"), by = c("store_nbr", "item_nbr")]
-setnames(groceryII_test_MSE, "squared_error", "MSE")
-summary(groceryII_test_MSE$MSE) #the summary shows that the prediction for some products are very good while others are very bad
->>>>>>> 73a9429f79c67fd8a5d873ba8bfae72b3f1a1e2f
