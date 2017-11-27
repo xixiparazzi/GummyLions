@@ -13,7 +13,8 @@ oil_dt <- fread(input = '../GummyLions/oil.csv')
 stores_dt <- fread(input = '../GummyLions/stores.csv')
 transactions_dt <- fread(input = '../GummyLions/transactions.csv')
 
-#read and clean data
+
+#read and clean data(skip until separating train and test set. Directly use groceryII_dt.csv)
 groceryII_dat <- fread(input = '../GummyLions/sample_groceryII.csv')
 unique.dates <- unique(groceryII_dat$date)
 unique.stores <- unique(groceryII_dat$store_nbr)
@@ -32,7 +33,6 @@ groceryII_dt[unit_sales < 0, ':='(unit_sales, 0)]
 groceryII_dt[, ':='(unit_sales, mapvalues(groceryII_dt$unit_sales, c(NA), c(0)))]
 groceryII_dt[, ':='(dow, weekdays(as.Date(date)))]
 
-
 #add holiday events
 #add local holiday
 holidays_events_local <- holidays_events_dt[locale == "Local" & transferred == FALSE, ]
@@ -43,6 +43,8 @@ groceryII_dt[date %in% holidays_events_regional$date & state %in% holidays_event
 #adding national holidays
 holidays_events_national <- holidays_events_dt[locale == "National" & transferred == FALSE, ]
 groceryII_dt[date %in% holidays_events_national$date, ':='(transferred, FALSE)]
+#write groceryII_dt into csv files
+write.csv(groceryII_dt, file = "groceryII_dt.csv")
 
 #split to train and test data set
 groceryII_train_dt <- groceryII_dt[date >= '2016-08-01' & date < '2017-08-01', ]
