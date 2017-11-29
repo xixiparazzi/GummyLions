@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 
 .DS_Store
 In_Use/holidays_events.csv
@@ -8,3 +9,7 @@ In_Use/stores.csv
 In_Use/test.csv
 In_Use/train.csv
 In_Use/train_dt.csv
+=======
+
+In_Use/train_dt.csv
+>>>>>>> 815c3190694520dda40f41999dda3ce8d3fa64b0
