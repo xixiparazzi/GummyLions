@@ -1,0 +1,374 @@
+---
+title: "Report Engine - Corporación Favorita"
+output: 
+  flexdashboard::flex_dashboard:
+    theme: cosmo
+    social: menu
+    source: embed
+    mathjax: local
+    self_contained: false
+runtime: shiny
+---
+
+
+```{r setup, include=FALSE}
+library(flexdashboard)
+library(shiny)
+library(rmarkdown)
+library(knitr)
+library(Hmisc)
+library(DT)
+library(data.table)
+library(leaflet)
+library(htmltools)
+library(plyr)
+library(dplyr)
+library(plotly)
+
+assignInNamespace("cedta.override", c(data.table:::cedta.override,"rmarkdown"), "data.table")
+opts_chunk$set(echo = FALSE, comment="", warning = FALSE, message = FALSE, tidy.opts=list(width.cutoff=55), tidy = TRUE)
+
+```
+
+
+```{r read_data, include=FALSE}
+dat_prophet <- fread(input = "../report_engine/prophet_prediction.csv", verbose = FALSE)
+score_prophet <- fread(input = "../report_engine/prophet_NWRMSLE.csv", verbose = FALSE)
+dat_ma <- fread(input = "../report_engine/meats_test_sample.csv", verbose = FALSE)
+dat_ma = dat_ma[order(date)]
+score_ma <- fread(input = "../report_engine/meats_test_sample_NWRMSLE.csv", verbose = FALSE)
+
+# just show data after 2016
+sample_demo_dt_prophet <- dat_prophet[date >= "2016-01-01", ]
+sample_demo_dt_ma <- dat_ma[date >= "2016-01-01", ]
+
+#stores data
+stores_dt <- fread(input = '../report_engine/stores.csv')
+
+```
+
+```{r functions}
+percentage.table <- function(x, digits = 1){
+  tab <- table(x)
+  percentage.tab <- 100*tab/(sum(tab))
+  rounded.tab <- round(x = percentage.tab, digits = digits)
+  return(rounded.tab)
+}
+
+round.numerics <- function(x, digits){
+  if(is.numeric(x)){
+    x <- round(x = x, digits = digits)
+  }
+  return(x)
+}
+
+```
+
+```{r define_variables}
+#change to factor & numeric
+prophet_factor_dt <- sample_demo_dt_prophet[,`:=`(store_nbr, as.factor(store_nbr))]
+prophet_factor_dt <- sample_demo_dt_prophet[,`:=`(item_nbr, as.factor(item_nbr))]
+prophet_factor_dt <- sample_demo_dt_prophet[,":="(unit_sales, as.numeric(unit_sales))]
+prophet_factor_dt <- sample_demo_dt_prophet[,":="(pred, as.numeric(pred))]
+prophet_factor_dt <- sample_demo_dt_prophet[,":="(date, as.Date(date))]
+
+
+ma_factor_dt <- sample_demo_dt_ma[,`:=`(store_nbr, as.factor(store_nbr))]
+ma_factor_dt <- sample_demo_dt_ma[,`:=`(item_nbr, as.factor(item_nbr))]
+ma_factor_dt <- sample_demo_dt_ma[,":="(unit_sales, as.numeric(unit_sales))]
+ma_factor_dt <- sample_demo_dt_ma[,":="(pred, as.numeric(pred))]
+ma_factor_dt <- sample_demo_dt_ma[,":="(pred_w_promo, as.numeric(pred_w_promo))]
+ma_factor_dt <- sample_demo_dt_ma[,":="(date, as.Date(date))]
+
+
+
+# round pred to 3 digits
+prophet_demo_dt <- prophet_factor_dt[, c("date", "store_nbr","item_nbr","unit_sales","pred")]
+prophet_demo_dt <- prophet_demo_dt[,":="(pred, round.numerics(pred, digits = 3))]
+temp = prophet_demo_dt[1:12716,]
+temp[,":="(pred, NA)]
+
+ma_demo_dt <- ma_factor_dt[, c("date", "store_nbr","item_nbr","unit_sales","pred")]
+ma_demo_dt <-  ma_demo_dt[order(date)]
+ma_demo_dt <- rbind(temp, ma_demo_dt)
+
+# add erro = unit_sales - pred
+prophet_demo_dt[, ":="(erro, unit_sales - pred)]
+ma_demo_dt[, ":="(erro, unit_sales - pred)]
+
+# add sign mark for erro
+prophet_demo_dt[, ":="(mark, erro>=0)]
+prophet_demo_dt[, `:=`(mark, mapvalues(mark, from = c(TRUE,FALSE), to = c("Positive","Negative")))]
+prophet_demo_erro = prophet_demo_dt[date >= "2017-08-01", ]
+
+ma_demo_dt[, ":="(mark, erro>=0)]
+ma_demo_dt[, `:=`(mark, mapvalues(mark, from = c(TRUE,FALSE), to = c("Positive","Negative")))]
+ma_demo_erro = ma_demo_dt[date >= "2017-08-01", ]
+
+unique.products <- prophet_demo_dt[, unique(item_nbr)]
+unique.stores <- prophet_demo_dt[, unique(store_nbr)]
+num.products <- length(unique.products)
+num.stores <- length(unique.stores)
+
+color <- c("#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#FF3333")
+
+```
+
+
+Stores
+===================================== 
+
+Inputs {.sidebar}
+-------------------------------------
+
+```{r}
+renderText(
+  "Check Prediction Results"
+)
+
+inputPanel(
+  selectInput(inputId = "product_variables_1", label = strong("Select Products:"), choices = unique.products, selected = unique.products[5]),
+  dateInput(inputId = "date_1", label = strong("Select Date:"), value = as.character(Sys.Date()-125))
+  
+)
+
+```
+
+Column {data-width=650}
+-------------------------------------
+
+### Map
+
+```{r map}
+
+lat <-  c(-0.1807, -0.2389, 0.0367141, -0.9316, -1.6636, 0.3516889, -1.5905, -1.4924, -1.2543, -2.1710, -2.227827, -1.8622, -1.8019, -1.0225, -2.6285, -2.2347644, -2.9001, -4.0079, -3.2581,  0.98333, -0.9677, -0.2714) 
+lng <- c(-78.4678, -79.1774, -78.1507, -78.6058, -78.6546, -78.1222, -78.9995, -78.0024, -78.6229, -79.9224, -80.9585, -79.9777, -79.5346, -79.4604, -80.3896, -80.9002, -79.0059, -79.2113, -79.9554, -79.65, -80.7089, -79.4648)
+
+stores_dt[,":="(counter, 1)]
+temp1 = stores_dt[, lapply(X = .SD, FUN = "sum"), .SDcol = "counter", by = 'city']
+temp1[, c('lat', 'lng') := list(lat, lng)]
+pop = paste("City:", temp1$city, "<br/>",
+            "Number of Stores:",temp1$counter)
+
+temp1 %>% leaflet() %>%
+  setView(lat = -0.900653, lng = -78.467834, zoom = 7) %>%
+  addTiles() %>%
+    addMarkers(
+      ~lng,
+      ~lat,
+      popup = pop) %>%
+  addCircleMarkers(color="red",
+                   weight= ~counter*2)
+  
+```
+
+### Chart
+```{r }
+renderPlot({
+  
+  overview_table = prophet_demo_dt[date%in%input$date_1 & item_nbr%in%input$product_variables_1, ]
+  
+  ggplot(overview_table) + 
+    geom_bar(aes(x = store_nbr, y = unit_sales),
+             stat="identity", fill = "#0072B2", colour="grey", width = 0.5) + 
+    geom_text(aes(x = store_nbr, y = unit_sales, label = unit_sales, vjust = -0.8, hjust = 0.5), show_guide = FALSE) +
+    ylim(min(overview_table$unit_sales, 0)*1.1, max(overview_table$unit_sales)*1.1) +
+    theme(axis.ticks = element_blank()) +
+    theme(axis.text.x = element_text(angle = 0, hjust = 0.5)) +
+    ylab("Unit Sales") +
+    xlab("Store") +
+    theme(axis.title.x = element_text(lineheight=4, face="bold",vjust = 0.5, size = 12)) +
+    theme(axis.title.y = element_text(lineheight=4, face="bold",hjust = 0.5, size = 12))
+    
+})
+```
+
+
+Prediction Results Overview
+===================================== 
+
+Inputs {.sidebar}
+-------------------------------------
+
+```{r}
+# shiny inputs defined here
+inputPanel(
+  selectInput(inputId = "product_variables", label = "Select Product:", choices = unique.products, selected = unique.products[5]),
+  selectInput(inputId = "store_variables", label = "Select Store:", choices = unique.stores, selected = unique.stores[2])
+)
+
+```
+ 
+Column {data-width=650}
+-------------------------------------
+    
+### MA - Sales vs Prediction {data-width=600}
+    
+```{r}
+
+renderPlot({
+  pred_ma_1 = ma_demo_dt[item_nbr%in%input$product_variables & store_nbr%in%input$store_variables, ]
+  
+  ggplot(pred_ma_1) + 
+    geom_point(aes(x = date, y = unit_sales), 
+               color = color[5], size = 1) + 
+    geom_point(aes(x = date, y = pred), 
+               color = color[6], size = 2, shape = 3) + 
+    theme(axis.ticks = element_blank()) +
+    theme(axis.text.x = element_text(angle = 0, hjust = 0.5)) +
+    ylab("Unit Sales") +
+    xlab("Date") +
+    theme(axis.title.x = element_text(lineheight=4, face="bold",vjust = 0.5, size = 12)) +
+    theme(axis.title.y = element_text(lineheight=4, face="bold",hjust = 0.5, size = 12)) +
+    geom_vline(aes(xintercept = as.Date("2017-08-01")),   
+                   color="#D55E00", linetype="dashed", size=1)
+    
+ 
+}) 
+
+
+```
+    
+### Prophet - Sales vs Prediction {data-width=600}
+
+```{r}
+renderPlot({
+  pred_pro_1 = prophet_demo_dt[item_nbr%in%input$product_variables & store_nbr%in%input$store_variables, ]
+  
+  ggplot(pred_pro_1) + 
+    geom_point(aes(x = date, y = unit_sales), 
+               color = color[5], size = 1) + 
+    geom_point(aes(x = date, y = pred), 
+               color = color[6], size = 2, shape = 3) + 
+    theme(axis.ticks = element_blank(), 
+          axis.text.x = element_blank()) +
+    theme(axis.text.x = element_text(angle = 0, hjust = 0.5)) +
+    ylab("Unit Sales") +
+    xlab("Date") +
+    theme(axis.title.x = element_text(lineheight=4, face="bold",vjust = 0.5, size = 12)) +
+    theme(axis.title.y = element_text(lineheight=4, face="bold",hjust = 0.5, size = 12)) +
+    geom_vline(aes(xintercept = as.Date("2017-08-01")),   
+                   color="#D55E00", linetype="dashed", size=1)
+  
+}) 
+```
+
+
+
+Prediction Erro
+===================================== 
+
+Inputs {.sidebar}
+-------------------------------------
+
+```{r}
+inputPanel(
+  selectInput(inputId = "product_variables_erro", label = "Select Products:", choices = unique.products, selected = unique.products[5]),
+  selectInput(inputId = "store_variables_erro", label = "Select Stores:", choices = unique.stores, selected = unique.stores[2])
+)
+```
+
+Column  {data-width=650}
+-------------------------------------
+   
+### Prediction Erro of MA
+
+```{r}
+renderPlot({
+  pred_ma_2 = ma_demo_erro[item_nbr%in%input$product_variables_erro & store_nbr%in%input$store_variables_erro, ]
+  ggplot(pred_ma_2) +
+    geom_bar(aes(x = date, y = erro, fill = mark),
+             stat="identity", colour="grey",width = 0.5) + 
+    scale_fill_manual(values=c("#0072B2", "#D55E00")) + 
+    theme(axis.ticks = element_blank(), 
+          axis.text.x = element_blank()) +
+    scale_fill_discrete(name="Sign", 
+                        breaks=c("Positive","Negative")) +
+    ylab("Erro") +
+    xlab("Date") +
+    theme(axis.title.x = element_text(lineheight=4, face="bold",vjust = 0.5, size = 12)) +
+    theme(axis.title.y = element_text(lineheight=4, face="bold",hjust = 0.5, size = 12)) +
+    theme(axis.text.x = element_text(angle = 0, hjust = 0.5)) +
+    ylim(low = -30, high= 30)
+}) 
+```   
+ 
+### Prediction Erro of Prophet 
+    
+```{r}
+renderPlot({
+  pred_prophet_2 = prophet_demo_erro[item_nbr%in%input$product_variables_erro & store_nbr%in%input$store_variables_erro, ]
+  ggplot(pred_prophet_2) +
+    geom_bar(aes(x = date, y = erro, fill = mark),
+             stat="identity", colour="grey",width = 0.5) + 
+    scale_fill_manual(values=c("#0072B2", "#D55E00")) + 
+    theme(axis.ticks = element_blank(), 
+          axis.text.x = element_blank()) +
+    scale_fill_discrete(name="Sign", 
+                        breaks=c("Positive","Negative")) +
+    ylab("Erro") +
+    xlab("Date") +
+    theme(axis.title.x = element_text(lineheight=4, face="bold",vjust = 0.5, size = 12)) +
+    theme(axis.title.y = element_text(lineheight=4, face="bold",hjust = 0.5, size = 12)) +
+    theme(axis.text.x = element_text(angle = 0, hjust = 0.5)) +
+    ylim(low = -30, high= 30)
+  
+  
+    
+}) 
+```
+
+
+Model evaluation
+===================================== 
+
+Inputs {.sidebar}
+-------------------------------------
+
+```{r}
+inputPanel(
+  selectInput(inputId = "product_variables_rate", label = "Select Product:", choices = unique.products, selected = unique.products[3]),
+  selectInput(inputId = "store_variables_rate", label = "Select Store:", choices = unique.stores, selected = unique.stores[1])
+)
+
+
+```
+
+Column  {data-height = 250}
+-------------------------------------
+
+### Prophet - NWRMSL
+
+```{r}
+renderGauge({
+rate <- score_prophet[item_nbr == input$product_variables_rate & store_nbr == input$store_variables_rate,NWRMSLE]
+rate <- round.numerics(rate, digits = 3)
+gauge(rate, min = 0, max = 1, 
+      gaugeSectors(success = c(0, 0.5), warning = c(0.5, 0.9), danger = c(0.9, 1)
+      ))
+}) 
+```
+
+### MA - NWRMSL 
+
+```{r}
+renderGauge({
+rate <- score_ma[item_nbr == input$product_variables_rate & store_nbr == input$store_variables_rate,NWRMSLE]
+rate <- round.numerics(rate, digits = 3)
+gauge(rate, min = 0, max = 1, 
+      gaugeSectors(success = c(0, 0.5), warning = c(0.5, 0.9), danger = c(0.9, 1)
+      ))
+}) 
+```
+
+### NWRMSL
+
+```{r}
+renderText({
+  "Models are evaluated on the Normalized Weighted Root Mean Squared Logarithmic Error (NWRMSLE), calculated as follows:
+  https://www.kaggle.com/c/favorita-grocery-sales-forecasting#evaluation
+  "
+
+}) 
+
+```
